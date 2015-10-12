@@ -1,0 +1,113 @@
+TITLE:: OfflineProcess
+summary:: Class to enable easy offline processing and analysis of audio files.
+related:: Classes/Score
+
+DESCRIPTION::
+link::Classes/OfflineProcess:: describes a collection of SynthDef-style processes that can be applied to an audio file.
+
+InstanceMethods::
+
+method:: putAr
+Add a audio rate process.
+
+argument:: name
+A link::Classes/Symbol::, the name of the operation. Names must be unique.
+argument:: function
+A SynthDef-style function of the form code::{ |input, time| }::, where input is the audio input, and time is the running time, in seconds. Output of the function must be a Ar link::Classes/UGen::.
+
+Adds the synthdef to the link::Classes/SynthDescLib:: specified by libname, and sends it to the library's servers. No defFile is written; all operations take place in memory.
+
+
+
+method:: putKr
+Add a control rate process.
+
+argument:: name
+A link::Classes/Symbol::, the name of the operation.  Names must be unique.
+argument:: function
+A SynthDef-style function of the form code::{ |input, time| }::, where input is the audio input, and time is the running time, in seconds. Output of the function must be a Kr link::Classes/UGen::.
+
+Adds the synthdef to the link::Classes/SynthDescLib:: specified by libname, and sends it to the library's servers. No defFile is written; all operations take place in memory.
+
+
+method:: putTr
+Add a triggered process. These processes will ONLY store values when they are triggered. Unlike Ar and Kr versions, output of the function should be of the form code::[trigger, [values...]]::. The values in code::values:: will be stored once for each time code::trigger:: changes from zero to non-zero. For example, the following function would record the amplitude in the input signal once per second.
+code::
+{
+	|sig|
+	var trigger, amp;
+	trigger = Impulse.kr(1);
+	amp = Amplitude.kr(sig);
+	[trigger, [amp]]
+}
+::
+
+argument:: name
+A link::Classes/Symbol::, the name of the operation.  Names must be unique.
+argument:: function
+A SynthDef-style function of the form code::{ |input, time| }::, where input is the audio input, and time is the running time, in seconds. Output of the function must be of the form code::[trigger, [values...]]::, as described above.
+
+
+method:: process
+Run the collected processes on an input file
+
+argument:: file
+Path to an input file.
+
+
+discussion::
+
+code::
+(
+~inFile = "/Users/fsc/Downloads/STE-039 a.wav";
+
+~proc = OfflineProcess();
+
+// Audio-rate process - produces an audio file of equal length to the input
+~proc.putAr(\compress, {
+	|input|
+	Compander.ar(input, input, 0.2, 1, 1 / 30);
+});
+
+// Control-rate process - produces an audio file of control-rate signal
+~proc.putAr(\amplitude, {
+	|input|
+	Amplitude.kr(input);
+});
+
+// Triggered process. Output should be of the form [trigger, [a, b, c....]]
+// Whenever the value at trigger crosses from non-positive to positive, the subsequent values (i.e. a, b, c)
+// are recorded.
+~proc.putTrig(\peaks, {
+	|input, time, delay=10|
+	var amp, peakAmp, reset, peakTime, timeSincePeak, newPeak, recordTrig;
+
+	reset = LocalIn.kr(1);
+
+	amp = Amplitude.kr(input);
+	peakAmp = RunningMax.kr(amp, reset);
+	newPeak = Changed.kr(peakAmp);
+	Poll.kr(newPeak, peakAmp, "peak");
+	peakTime = Latch.kr(time, newPeak);
+	timeSincePeak = Sweep.kr(newPeak);
+	recordTrig = Trig.kr((timeSincePeak > delay), 0.001);
+
+	LocalOut.kr(recordTrig);
+
+	[recordTrig, [peakTime, peakAmp]]
+});
+
+~proc.outputPath = "~/Desktop/".standardizePath;
+
+~proc.process(~inFile);
+)
+
+// Get results:
+~proc.resultFile(\compress).postln;
+
+~proc.resultFile(\amplitude).postln;
+
+~proc.resultData(\peaks).postln;
+
+
+::
