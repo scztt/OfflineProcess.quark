@@ -8,9 +8,7 @@ version: 	"0.0.1",
 schelp: 	"OfflineProcess",
 test:		"Test/OfflineProcess_unittest.scd",
 url:		"https://github.com/scztt/offlineprocess.quark",
-dependencies:	[
-	"UnitTesting@2a8f5e18aaa7cd25968ec094bbfa75a7fb3094b6"
-],
+dependencies:	[],
 isCompatible:	true,
 since:		"2015"
 )
