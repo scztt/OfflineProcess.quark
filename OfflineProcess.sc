@@ -1,44 +1,30 @@
-OfflineProcess {
-	var <passes, <args;
+OfflineProcessRun {
+	var parentProcess, fileOrTime, <args;
 	var outputFiles;
 	var <blockSize=64;
-	var <inputDuration, <inputChannels, <sampleRate, <controlRate;
-	var <outputPath;
+	var <processingDeferred;
+	var <>headerFormat="AIFF", <>sampleFormat="float";
+	var <>inputDuration, <>inputChannels, <>sampleRate, <controlRate;
+	var outputPath;
+	var outPaths, inputFile;
 	var <resultFiles;
+	var <>preroll = 0, <>postroll = 0, <duration = 0.1;
+	var score, buffers, synths, defs;
+	var fileIteration = 0;
+	var <resultString, <progress;
 
 	*new {
-		^super.new.init;
+		|parent, fileOrTime, args|
+		^super.new.init(parent, fileOrTime, args)
 	}
 
 	init {
-		passes = IdentityDictionary();
-		args = IdentityDictionary();
-	}
-
-	at {
-		|name|
-		^passes[name]
-	}
-
-	putAr {
-		|name, func|
-		var pass = OfflinePassAr(name, func);
-		passes[name] = pass;
-		^pass
-	}
-
-	putKr {
-		|name, func|
-		var pass = OfflinePassKr(name, func);
-		passes[name] = pass;
-		^pass
-	}
-
-	putTrig {
-		|name, func|
-		var pass = OfflinePassTrig(name, func);
-		passes[name] = pass;
-		^pass
+		|parent, inFileOrTime, inArgs|
+		fileOrTime = inFileOrTime;
+		parentProcess = parent;
+		args = inArgs ?? { IdentityDictionary() };
+		processingDeferred = Deferred();
+		this.setup();
 	}
 
 	outputPath_{
@@ -46,140 +32,207 @@ OfflineProcess {
 		outputPath = path;
 	}
 
-	process {
-		|file|
-		var score, buffers, synths, defs;
-		var preroll = 0, duration;
-		var fileIteration = 0;
-		var outPaths, inputFile;
+	outputPath {
+		^outputPath ?? { parentProcess.outputPath }
+	}
 
-		inputFile = SoundFile();
-		if (inputFile.openRead(file).not) {
-			Exception("Could not read file: %".format(file)).throw;
+	progressMsg {
+		^"/%/progress".format(this.identityHash).asSymbol
+	}
+
+	setup {
+		var file;
+
+		if (fileOrTime.isString) {
+			inputFile = SoundFile();
+			if (inputFile.openRead(fileOrTime).not) {
+				Exception("Could not read file: %".format(fileOrTime)).throw;
+			} {
+				sampleRate = inputFile.sampleRate;
+				controlRate = (sampleRate / blockSize).floor;
+				duration = inputDuration = inputFile.numFrames / inputFile.sampleRate;
+				inputChannels = inputFile.numChannels;
+				// "INPUT FILE:".postln;
+				// "  sampleRate: %".format(sampleRate).postln;
+				// "  controlRate: %".format(controlRate).postln;
+				// "  duration: %".format(duration).postln;
+				// "  inputChannels: %".format(inputChannels).postln;
+			}
 		} {
-			sampleRate = inputFile.sampleRate;
-			controlRate = (sampleRate / blockSize).floor;
-			duration = inputDuration = inputFile.numFrames / inputFile.sampleRate;
-			inputChannels = inputFile.numChannels;
-			"INPUT FILE:".postln;
-			"  sampleRate: %".format(sampleRate).postln;
-			"  controlRate: %".format(controlRate).postln;
-			"  duration: %".format(duration).postln;
-			"  inputChannels: %".format(inputChannels).postln;
+			inputFile = nil;
 
-			passes.do {
-				|pass|
-				if (pass.preroll > preroll) {
-					preroll = preroll;
-				};
-				if (pass.duration(inputDuration) > duration) {
-					duration = pass.duration(inputDuration);
-				}
+			sampleRate = sampleRate ?? 48000;
+			controlRate = (sampleRate / blockSize).floor;
+			duration = inputDuration = fileOrTime ?? inputDuration ?? 30;
+			inputChannels = inputChannels ?? 2;
+			// "INPUT FILE:".postln;
+			// "  sampleRate: %".format(sampleRate).postln;
+			// "  controlRate: %".format(controlRate).postln;
+			// "  duration: %".format(duration).postln;
+			// "  inputChannels: %".format(inputChannels).postln;
+		};
+
+		outPaths = IdentityDictionary();
+		parentProcess.passes.keysValuesDo {
+			|name, pass|
+			var path, filename;
+
+			path = (outputPath ?? PathName.tmp);
+			filename = "%_" ++ "%.%".format(name, headerFormat);
+			while { File.exists(path +/+ filename.format(fileIteration)) } {
+				fileIteration = fileIteration + 1;
 			};
 
-			outPaths = IdentityDictionary();
-			passes.keysValuesDo {
-				|name, pass|
+			outPaths[name] = path +/+ filename;
+		};
+		outPaths = outPaths.collect(_.format(fileIteration));
+		outPaths.do {
+			|p|
+			File(p, "w").close();
+		};
+
+		Log(\OfflineProcess).debug("Output paths: " + outPaths.asString);
+
+		defs = parentProcess.makeDefs(inputChannels, parentProcess.passes, this.progressMsg);
+		synths = parentProcess.makeSynths(defs);
+		buffers = this.makeBuffers();
+
+		score = parentProcess.baseScore.deepCopy;
+	}
+
+	setup2 {
+
+		parentProcess.passes.do {
+			|pass|
+			preroll = max(preroll, pass.preroll);
+			postroll = max(postroll, pass.postroll);
+			duration = max(duration, pass.duration(inputDuration));
+		};
+
+		parentProcess.additionalBuffers.do {
+			|bufMsg|
+			score.add([0, bufMsg]);
+		};
+
+		parentProcess.passes.keysValuesDo {
+			|name, pass|
+
+			buffers[name].do {
+				|buffer|
 				var path, filename;
 
-				path = (outputPath ?? PathName.tmp);
-				filename = "%_" ++ "%.aiff".format(name);
-				while { File.exists(path +/+ filename.format(fileIteration)) } {
-					fileIteration = fileIteration + 1;
-				};
+				// create buffer
+				score.add([0, buffer.allocMsg]);
+				score.add([0, buffer.fillMsg(0, buffer.numFrames, pass.bufferFill)]);
 
-				outPaths[name] = path +/+ filename;
-			};
-			outPaths = outPaths.collect(_.format(fileIteration));
-
-			defs = this.makeDefs();
-			buffers = this.makeBuffers();
-			synths = this.makeSynths(defs);
-
-			score = Score();
-			passes.keysValuesDo {
-				|name, pass|
-
-				buffers[name].do {
-					|buffer|
-					var path, filename;
-
-					// create buffer
-					score.add([0, buffer.allocMsg]);
-					score.add([0, buffer.fillMsg(0, buffer.numFrames, pass.bufferFill)]);
-
-					// write buffer to file
-					score.add([
-						duration + 0.1,
-						buffer.writeMsg(
-							outPaths[name].format(fileIteration), "aiff", "float"
-						);
-					])
-				};
-
-				synths[name].do {
-					|synth|
-					var startTime = preroll - pass.preroll;
-
-					// start progress
-					score.add([0,
-						Synth.basicNew(\offlineProcessProgress, Server.default, 50).newMsg(
-							args:[\duration, duration]
-						)
-					]);
-
-					// start synth
-					score.add([
-						startTime,
-						synth.newMsg(
-							args:[\bufnum, buffers[name].bufnum] ++ args[name]
-						)
-					]);
-
-					// free synth
-					score.add([
-						startTime + pass.duration(inputDuration),
-						synth.freeMsg
-					]);
-				};
+				// write buffer to file
+				score.add([
+					duration + 0.1,
+					buffer.writeMsg(
+						outPaths[name].format(fileIteration), headerFormat, sampleFormat
+					);
+				])
 			};
 
-			score.sort;
-			score.score.do(_.postln);
-			OSCdef(("%-%".format(this.class, this.identityHash)).asSymbol, {
-				|msg|
-				msg.postln;
-			}, this.progressMsg);
-			// score.recordNRT(
-			// 	PathName.tmp +/+ this.identityHash.asString + ".osc",
-			// 	"/dev/null",
-			// 	file,
-			// 	sampleRate, "aiff", "float",
-			// 	options: Server.default.options.copy
-			// 	.blockSize_(blockSize)
-			// 	.numInputBusChannels_(inputChannels),
-			// 	duration: duration + 1,
-			// 	action: {
-			// 		resultFiles = outPaths;
-			// 		OSCdef(("%-%".format(this.class, this.identityHash)).asSymbol).free;
-			// 	}
-			// )
-			^this.offlineProcess(
-				score,
-				PathName.tmp +/+ this.identityHash.asString + ".osc",
-				"/dev/null",
-				file,
-				sampleRate, "aiff", "float",
-				options: Server.default.options.copy
+			synths[name].do {
+				|synth|
+				var startTime = preroll;
+
+				// start progress
+				score.add([0,
+					Synth.basicNew(\offlineProcessProgress, Server.default, 50).newMsg(
+						args:[\duration, duration]
+					)
+				]);
+
+				// start synth
+				score.add([
+					startTime,
+					synth.newMsg(
+						args:[\bufnum, buffers[name].bufnum] ++ (args[name] !? _.asPairs ?? [])
+					)
+				]);
+
+				// free synth
+				score.add([
+					startTime + this.duration(inputDuration),
+					synth.freeMsg
+				]);
+			};
+		};
+
+		score.sort;
+	}
+
+	run {
+		var proc;
+
+		this.setup2();
+		// score.recordNRT(
+		// 	PathName.tmp +/+ this.identityHash.asString + ".osc",
+		// 	"/dev/null",
+		// 	inputFile.notNil.if(fileOrTime),
+		// 	sampleRate, headerFormat, sampleFormat,
+		// 	options: Server.default.options.copy
+		// 	.blockSize_(blockSize)
+		// 	.numInputBusChannels_(inputChannels)
+		// 	.memSize_(2**20),
+		// 	duration: duration + 1,
+		// 	action: {
+		// 		resultFiles = outPaths;
+		// 		OSCdef(("%-%".format(this.class, this.identityHash)).asSymbol).free;
+		// 		processingCondition.unhang;
+		// 	}
+		// )
+
+		proc = this.offlineProcess(
+			score,
+			PathName.tmp +/+ this.identityHash.asString ++ ".osc",
+			"/dev/null",
+			inputFile.notNil.if(fileOrTime),
+			sampleRate, "aiff", "float",
+			options: Server.default.options.copy
 				.blockSize_(blockSize)
 				.numInputBusChannels_(inputChannels),
-				duration: duration + 1,
-				action: {
-					resultFiles = outPaths;
-					OSCdef(("%-%".format(this.class, this.identityHash)).asSymbol).free;
-				}
-			)
+			duration: duration + 1,
+			action: {
+				|result|
+			}
+		);
+
+		progress = 0;
+
+		fork {
+			var line;
+			while { proc.isOpen } {
+				line = proc.getLine();
+				if (line.notNil) {
+					line = line.findRegexp("__progress__: (.*)");
+					if (line.size >= 2) {
+						progress = line[1][1].asFloat;
+						this.changed(\progress, progress);
+					}
+				} {
+					proc.close();
+				};
+			};
+
+			resultFiles = outPaths;
+			progress = 1.0;
+			processingDeferred.value = this;
 		}
+	}
+
+	deferred {
+		^processingDeferred
+	}
+
+	wait {
+		processingDeferred.wait;
+	}
+
+	isDone {
+		^processingDeferred.isResolved;
 	}
 
 	offlineProcess {
@@ -198,59 +251,24 @@ OfflineProcess {
 		 	+ sampleRate + headerFormat + sampleFormat +
 			(options ? Score.options).asOptionsString
 			+ completionString);
-		cmd.postln;
+
+		Log(\OfflineProcess).debug(cmd);
+
 		^Pipe(cmd, "r");
 	}
 
 	makeBuffers {
 		var buffers = IdentityDictionary();
-		passes.keysValuesDo {
+		parentProcess.passes.keysValuesDo {
 			|name, pass, i|
 			buffers[name] = Buffer(
 				Server.default,
 				pass.numFrames(pass.duration(inputDuration), sampleRate, controlRate),
 				pass.numChannels(inputChannels),
 				i
-			).postln;
-		};
-		^buffers;
-	}
-
-	progressMsg {
-		^"/%/progress".format(this.identityHash).asSymbol
-	}
-
-	makeDefs {
-		var defs = IdentityDictionary();
-
-		SynthDef(\offlineProcessProgress, {
-			|duration|
-			var prog = Line.kr(0, 1, duration);
-			SendReply.kr(prog % 0.01, this.progressMsg, prog);
-		}).store;
-
-		passes.keysValuesDo {
-			|name, pass, i|
-			var def = pass.makeDef(inputChannels.postln);
-			def.store;
-			defs[name] = def;
-		};
-
-		^defs
-	}
-
-	makeSynths {
-		|defs|
-		var synths = IdentityDictionary();
-		passes.keysValuesDo {
-			|name, pass, i|
-			synths[name] = Synth.basicNew(
-				defs[name].name,
-				Server.default,
-				1000 + i
 			);
 		};
-		^synths
+		^buffers;
 	}
 
 	resultFile {
@@ -265,20 +283,115 @@ OfflineProcess {
 	resultData {
 		|name|
 		if (resultFiles.notNil) {
-			^passes[name].handleData(resultFiles[name]);
+			^parentProcess.passes[name].handleData(resultFiles[name]);
 		} {
 			^nil
 		}
+	}
+
+}
+
+OfflineProcess {
+	var <passes, <args;
+	var <additionalBuffers, <outputPath;
+	var <>headerFormat="AIFF", <>sampleFormat="float";
+	var <baseScore;
+
+	*new {
+		^super.new.init;
+	}
+
+	init {
+		passes = IdentityDictionary();
+		args = IdentityDictionary();
+		baseScore = Score();
+	}
+
+	process {
+		|fileOrTime|
+		^OfflineProcessRun(this, fileOrTime).run();
+	}
+
+	at {
+		|name|
+		^passes[name]
+	}
+
+	putAr {
+		|name, func|
+		var pass = OfflinePassAr(name, func);
+		passes[name] = pass;
+	}
+
+	putKr {
+		|name, func|
+		var pass = OfflinePassKr(name, func);
+		passes[name] = pass;
+	}
+
+	putTrig {
+		|name, func|
+		var pass = OfflinePassTrig(name, func);
+		passes[name] = pass;
+	}
+
+	outputPath_{
+		|path|
+		outputPath = path;
+	}
+
+	addBufferFromFile {
+		|path|
+		var buffer = Buffer(Server.default, 1, 1);
+		additionalBuffers = additionalBuffers.add(buffer.allocReadMsg(path));
+		^buffer
+	}
+
+	makeDefs {
+		|inputChannels, passes, msg|
+		var defs = IdentityDictionary();
+
+		SynthDef(\offlineProcessProgress, {
+			|duration|
+			var prog = Line.kr(0, 1, duration);
+			prog.poll(1, "__progress__");
+		}).store;
+
+		passes.keysValuesDo {
+			|name, pass, i|
+			var def = pass.makeDef(inputChannels);
+			defs[name] = def;
+		};
+
+		^defs
+	}
+
+	makeSynths {
+		|defs|
+		var synths = IdentityDictionary();
+		defs.keysValuesDo {
+			|name, def, i|
+			synths[name] = Synth.basicNew(
+				def.name,
+				Server.default,
+				1000 + i
+			);
+		};
+		^synths
 	}
 }
 
 OfflinePass {
 	var <name, <func, <>preroll, <>postroll;
-	var outChannels;
+	var outChannels, cachedDefs;
 
 	*new {
 		|name, func, preroll=0, postroll=0|
-		^super.newCopyArgs(name, func, preroll, postroll)
+		^super.newCopyArgs(name, func, preroll, postroll).init
+	}
+
+	init {
+		cachedDefs = ();
 	}
 
 	defName {
@@ -286,7 +399,12 @@ OfflinePass {
 	}
 
 	makeDef {
-		this.subclassResponsibility(\makeDef);
+		|inChannels, duration|
+		if (cachedDefs[inChannels].isNil) {
+			cachedDefs[inChannels] = this.prMakeDef(inChannels, duration);
+			cachedDefs[inChannels].store();
+		};
+		^cachedDefs[inChannels]
 	}
 
 	duration {
@@ -319,14 +437,14 @@ OfflinePassAr : OfflinePass {
 		^(sampleRate * inputDuration)
 	}
 
-	makeDef {
+	prMakeDef {
 		|inChannels, duration|
-		inChannels.postln;
+
 		^SynthDef(this.defName, {
 			|bufnum|
 			var progress;
 			var time = Sweep.ar(1, 1);
-			var sig = SoundIn.ar(Range(0, inChannels.postln).asArray);
+			var sig = SoundIn.ar(Range(0, inChannels).asArray);
 
 			var output = SynthDef.wrap(func, prependArgs:[sig, time]);
 			outChannels = output.isArray.if(output.size, 1);
@@ -352,7 +470,7 @@ OfflinePassKr : OfflinePass {
 		^(controlRate * inputDuration)
 	}
 
-	makeDef {
+	prMakeDef {
 		|inChannels|
 		^SynthDef(this.defName, {
 			|bufnum|
@@ -374,6 +492,8 @@ OfflinePassKr : OfflinePass {
 			sf.readData(array);
 
 			^array.clump(sf.numChannels).flop.collect({ |chan| Signal.newFrom(chan) })
+		} {
+			Error("Error reading %".format(file)).throw;
 		}
 	}
 }
@@ -385,7 +505,7 @@ OfflinePassTrig : OfflinePass {
 		^bufferSize * this.numChannels;
 	}
 
-	makeDef {
+	prMakeDef {
 		|inChannels|
 		^SynthDef(this.defName, {
 			|bufnum|
