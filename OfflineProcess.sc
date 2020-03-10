@@ -11,7 +11,7 @@ OfflineProcessRun {
 	var <>preroll = 0, <>postroll = 0, <duration = 0.1;
 	var score, buffers, synths, defs;
 	var fileIteration = 0;
-	var <resultString, <progress;
+	var <resultString, <progress, processWaitTime=0.2;
 
 	*new {
 		|parent, fileOrTime, args|
@@ -215,6 +215,7 @@ OfflineProcessRun {
 				} {
 					proc.close();
 				};
+				processWaitTime.wait;
 			};
 
 			resultFiles = outPaths;
