@@ -49,15 +49,16 @@ A SynthDef-style function of the form code::{ |input, time| }::, where input is 
 
 
 method:: process
-Run the collected processes on an input file
+Run the collected processes on an input file. Returns an link::Classes/OfflineProcessRun:: representing the run.
 
 argument:: file
 Path to an input file.
 
 
-discussion::
+EXAMPLES::
 
 code::
+
 (
 ~inFile = "/Users/fsc/Downloads/STE-039 a.wav";
 
@@ -99,15 +100,15 @@ code::
 
 ~proc.outputPath = "~/Desktop/".standardizePath;
 
-~proc.process(~inFile);
+~run1 = ~proc.process(~inFile);
 )
 
 // Get results:
-~proc.resultFile(\compress).postln;
+~run1.resultFile(\compress).postln;
 
-~proc.resultFile(\amplitude).postln;
+~run1.resultFile(\amplitude).postln;
 
-~proc.resultData(\peaks).postln;
+~run1.resultData(\peaks).postln;
 
 
 ::
