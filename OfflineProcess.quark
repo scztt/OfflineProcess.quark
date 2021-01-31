@@ -1,15 +1,17 @@
 (
-name:		"OfflineProcess",
-summary:	"Class to enable easy offline processing and analysis of audio files.",
-author:		"scott@artificia.org",
-copyright:	"Frank Scott Carver, 2015",
-license:	"MIT",
-version: 	"0.0.2",
-schelp: 	"OfflineProcess",
-test:		"Test/OfflineProcess_unittest.scd",
-url:		"https://github.com/scztt/offlineprocess.quark",
-dependencies:	[],
-isCompatible:	true,
-since:		"2015"
+          name: "OfflineProcess",
+       summary: "Class to enable easy offline processing and analysis of audio files.",
+        author: "scott@artificia.org",
+     copyright: "Frank Scott Carver, 2015",
+       license: "MIT",
+       version: "0.0.3",
+        schelp: "OfflineProcess",
+          test: "Test/OfflineProcess_unittest.scd",
+           url: "https://github.com/scztt/offlineprocess.quark",
+  dependencies: [
+              		"Log",
+              		"https://github.com/scztt/Deferred.quark"
+                ],
+  isCompatible: true ,
+         since: "2015"
 )
-
